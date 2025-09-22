@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pizarra Interactiva</title>
+  <style>
+    :root{--bg:#f5f7fb;--panel:#fff;--accent:#0ea5a4;--muted:#6b7280}
+    *{box-sizing:border-box}
+    body{font-family:Inter, system-ui, Arial; margin:0; background:var(--bg); color:#111}
+    .app{max-width:1100px;margin:24px auto;padding:16px}
+    .top{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+    .panel{background:var(--panel);padding:10px;border-radius:10px;box-shadow:0 6px 18px rgba(16,24,40,0.06);display:flex;gap:8px;align-items:center}
+    label{font-size:13px;color:var(--muted);margin-right:6px}
+    input[type=color]{width:40px;height:36px;border-radius:6px;border:1px solid #e6eef0;padding:0}
+    input[type=range]{width:120px}
+    select, button{padding:8px 10px;border-radius:8px;border:1px solid #e6eef0;background:white}
+    button{cursor:pointer}
+    .btn-danger{background:#ffefef;border-color:#ffb4b4}
+    .tools{display:flex;gap:6px;align-items:center}
+    .canvas-wrap{background:white;border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(16,24,40,0.04)}
+    canvas{width:100%;height:70vh;border-radius:8px;background:linear-gradient(180deg,#fff,#fbfdff)}
+    .hint{font-size:13px;color:var(--muted);margin-top:8px}
+    @media (max-width:700px){.top{flex-direction:column;align-items:stretch}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h2>Pizarra Interactiva</h2>
+    <div class="top">
+      <div class="panel">
+        <label for="tool">Herramienta</label>
+        <select id="tool">
+          <option value="pen">Lápiz</option>
+          <option value="rect">Rectángulo</option>
+          <option value="circle">Círculo</option>
+          <option value="eraser">Borrador</option>
+        </select>
+        <div style="width:1px;height:28px;background:#eef;margin:0 8px"></div>
+        <label for="color">Color</label>
+        <input id="color" type="color" value="#111827" />
+        <label for="size">Grosor</label>
+        <input id="size" type="range" min="1" max="60" value="4" />
+        <div style="width:1px;height:28px;background:#eef;margin:0 8px"></div>
+        <button id="undo">Deshacer</button>
+        <button id="redo">Rehacer</button>
+        <button id="clear" class="btn-danger">Borrar todo</button>
+        <button id="save">Guardar imagen</button>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <canvas id="board"></canvas>
+      <div class="hint">La mejor pizarra interactiva que vas a encontrar en tu vida puedes hacer lo que quieras en esta pizarra.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('board');
+  const ctx = canvas.getContext('2d', { willReadFrequently: false });
+  const toolEl = document.getElementById('tool');
+  const colorEl = document.getElementById('color');
+  const sizeEl = document.getElementById('size');
+  const undoBtn = document.getElementById('undo');
+  const redoBtn = document.getElementById('redo');
+  const clearBtn = document.getElementById('clear');
+  const saveBtn = document.getElementById('save');
+
+  // Estados
+  let drawing = false;
+  let current = null; // trazo temporal
+  let strokes = []; // pila para deshacer
+  let redoStack = [];
+  let devicePixelRatioBackup = window.devicePixelRatio || 1;
+
+  // Config canvas size responsivo
+  function resizeCanvas(){
+    // preserve content by redrawing from strokes after resize
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(rect.width * ratio);
+    canvas.height = Math.round(rect.height * ratio);
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.setTransform(ratio,0,0,ratio,0,0);
+    redraw();
+  }
+
+  // Redibuja todo desde strokes
+  function redraw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    for(const s of strokes){
+      if(s.type === 'stroke') drawStroke(ctx, s, false);
+      else if(s.type === 'rect') drawRect(ctx, s, false);
+      else if(s.type === 'circle') drawCircle(ctx, s, false);
+    }
+  }
+
+  // Dibujo de trazos libres
+  function drawStroke(ctx, s, live){
+    if(!s.points || s.points.length===0) return;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = s.size;
+    ctx.strokeStyle = s.tool === 'eraser' ? 'rgba(0,0,0,1)' : s.color;
+    if(s.tool === 'eraser') ctx.globalCompositeOperation = 'destination-out';
+    else ctx.globalCompositeOperation = 'source-over';
+
+    ctx.beginPath();
+    const p0 = s.points[0];
+    ctx.moveTo(p0.x, p0.y);
+    for(let i=1;i<s.points.length;i++){
+      const p = s.points[i];
+      ctx.lineTo(p.x,p.y);
+    }
+    ctx.stroke();
+    if(!live) ctx.closePath();
+  }
+
+  function drawRect(ctx, s, live){
+    ctx.lineWidth = s.size;
+    ctx.strokeStyle = s.color;
+    ctx.globalCompositeOperation = 'source-over';
+    const x = Math.min(s.x1,s.x2);
+    const y = Math.min(s.y1,s.y2);
+    const w = Math.abs(s.x2 - s.x1);
+    const h = Math.abs(s.y2 - s.y1);
+    ctx.beginPath();
+    ctx.rect(x,y,w,h);
+    ctx.stroke();
+    ctx.closePath();
+  }
+
+  function drawCircle(ctx, s, live){
+    ctx.lineWidth = s.size;
+    ctx.strokeStyle = s.color;
+    ctx.globalCompositeOperation = 'source-over';
+    const cx = (s.x1 + s.x2)/2;
+    const cy = (s.y1 + s.y2)/2;
+    const rx = Math.abs(s.x2 - s.x1)/2;
+    const ry = Math.abs(s.y2 - s.y1)/2;
+    const r = Math.max(rx, ry);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, r, r, 0, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.closePath();
+  }
+
+  // Helpers: get mouse/touch position relative to canvas
+  function getPos(e){
+    const rect = canvas.getBoundingClientRect();
+    let clientX, clientY;
+    if(e.touches && e.touches[0]){ clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; }
+    else { clientX = e.clientX; clientY = e.clientY; }
+    // account for CSS pixels (ctx uses CSS pixels due to setTransform)
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }
+
+  // Eventos comunes
+  function pointerDown(e){
+    e.preventDefault();
+    const pos = getPos(e);
+    drawing = true;
+    redoStack = []; // limpiar redo cuando se hace una nueva acción
+    const tool = toolEl.value;
+    const size = parseInt(sizeEl.value,10);
+    const color = colorEl.value;
+    if(tool === 'pen' || tool === 'eraser'){
+      current = { type: 'stroke', tool, size, color, points: [pos] };
+      strokes.push(current);
+    } else if(tool === 'rect'){
+      current = { type: 'rect', size, color, x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y };
+      strokes.push(current);
+    } else if(tool === 'circle'){
+      current = { type: 'circle', size, color, x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y };
+      strokes.push(current);
+    }
+    redraw();
+  }
+
+  function pointerMove(e){
+    if(!drawing || !current) return;
+    e.preventDefault();
+    const pos = getPos(e);
+    if(current.type === 'stroke'){
+      current.points.push(pos);
+    } else if(current.type === 'rect' || current.type === 'circle'){
+      current.x2 = pos.x; current.y2 = pos.y;
+    }
+    // dibuja todo && trazo actual como "live"
+    redraw();
+    // dibujar trazo actual encima
+    if(current.type === 'stroke') drawStroke(ctx, current, true);
+    else if(current.type === 'rect') drawRect(ctx, current, true);
+    else if(current.type === 'circle') drawCircle(ctx, current, true);
+  }
+
+  function pointerUp(e){
+    if(!drawing) return;
+    drawing = false;
+    current = null;
+    redraw();
+  }
+
+  // Undo/Redo
+  function undo(){
+    if(strokes.length === 0) return;
+    const s = strokes.pop();
+    redoStack.push(s);
+    redraw();
+  }
+  function redo(){
+    if(redoStack.length === 0) return;
+    const s = redoStack.pop();
+    strokes.push(s);
+    redraw();
+  }
+
+  // Clear
+  function clearAll(){
+    if(!confirm('¿Borrar todo el contenido?')) return;
+    strokes = [];
+    redoStack = [];
+    redraw();
+  }
+
+  // Save
+  function saveImage(){
+    // export at device pixel ratio for higher resolution
+    const ratio = window.devicePixelRatio || 1;
+    const tmpCanvas = document.createElement('canvas');
+    const rect = canvas.getBoundingClientRect();
+    tmpCanvas.width = Math.round(rect.width * ratio);
+    tmpCanvas.height = Math.round(rect.height * ratio);
+    const tmpCtx = tmpCanvas.getContext('2d');
+    // white background
+    tmpCtx.fillStyle = '#ffffff';
+    tmpCtx.fillRect(0,0,tmpCanvas.width,tmpCanvas.height);
+    tmpCtx.setTransform(ratio,0,0,ratio,0,0);
+    // redraw strokes into tmpCtx
+    for(const s of strokes){
+      if(s.type === 'stroke') drawStroke(tmpCtx, s, false);
+      else if(s.type === 'rect') drawRect(tmpCtx, s, false);
+      else if(s.type === 'circle') drawCircle(tmpCtx, s, false);
+    }
+    const data = tmpCanvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = data;
+    a.download = 'pizarra.png';
+    a.click();
+  }
+
+  // Listeners: usar eventos pointer si estan disponibles (maneja mouse+touch)
+  function addListeners(){
+    // Pointer events
+    if(window.PointerEvent){
+      canvas.addEventListener('pointerdown', pointerDown);
+      window.addEventListener('pointermove', pointerMove);
+      window.addEventListener('pointerup', pointerUp);
+      canvas.addEventListener('pointercancel', pointerUp);
+    } else {
+      // fallback touch + mouse
+      canvas.addEventListener('mousedown', pointerDown);
+      window.addEventListener('mousemove', pointerMove);
+      window.addEventListener('mouseup', pointerUp);
+      canvas.addEventListener('touchstart', pointerDown, {passive:false});
+      window.addEventListener('touchmove', pointerMove, {passive:false});
+      window.addEventListener('touchend', pointerUp);
+      window.addEventListener('touchcancel', pointerUp);
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    undoBtn.addEventListener('click', undo);
+    redoBtn.addEventListener('click', redo);
+    clearBtn.addEventListener('click', clearAll);
+    saveBtn.addEventListener('click', saveImage);
+
+    // keyboard shortcuts
+    window.addEventListener('keydown', (ev) => {
+      if((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='z') { ev.preventDefault(); undo(); }
+      else if((ev.ctrlKey||ev.metaKey) && ev.key.toLowerCase()==='y') { ev.preventDefault(); redo(); }
+    });
+  }
+
+  // Init
+  addListeners();
+  // initial resize after DOM ready
+  setTimeout(resizeCanvas, 50);
+
+  // Small sample: add a tiny welcome stroke into history (optional)
+  // strokes.push({ type:'stroke', tool:'pen', size:2, color:'#0ea5a4', points:[{x:10,y:10},{x:120,y:20},{x:200,y:16}] });
+  // redraw();
+
+})();
+</script>
+</body>
+</html>
